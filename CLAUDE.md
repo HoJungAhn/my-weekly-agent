@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 프로젝트 목적 (What we are building)
 
-**주간보고 정리 agent** — 운영 중인 시스템에 대한 주간 업무 보고서를, "지난주에 한 일의 단순 나열"이 아니라
+**Relay (주간보고 정리 agent)** — 운영 중인 시스템에 대한 주간 업무 보고서를, "지난주에 한 일의 단순 나열"이 아니라
 **①시스템이 안정적으로 운영되고 있다는 증거 + ②향후 리스크 관리**에 초점을 맞춰 작성하도록 돕는 도구.
 
 보고서는 세 축으로 구성된다: **정량 지표(숫자) / 정성 활동(한 일) / 예측(다음 주·리스크)**.
@@ -43,8 +43,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - **인터페이스를 먼저, 구현은 단계적으로.** `find_related_tasks(text, filters) -> [Task]` 같은 인터페이스를 처음부터 두되, 데이터가 적은 초기엔 내부 구현을 "최근 N주 Task를 LLM 컨텍스트에 직접 투입"으로 하고, 데이터가 쌓이면 "메타필터+벡터 검색"으로 교체한다. RAG는 (B)를 위해 결국 도입하지만, MVP 1단계에는 없어도 된다.
    - 벡터 스토어를 도입하더라도 SQLite가 원본이고, Task 추가/수정 시 벡터 인덱스를 동기화한다.
 
-2. **Task를 1급 시민으로.** 보고서를 통문서로 저장하지 않고, **Task 단위로 저장**한 뒤 보고서는 Task를 렌더링한 결과로 본다.
-   - 주요 필드(계획): `week`(예: `2026-W26`), `system`(운영 대상 시스템 식별자 — 멀티 시스템 지원), `category_key`(템플릿 카테고리의 `key`, label 아님), `title`/`detail`, `status`(완료/진행중/미완료/이월), `carried_from`(이월 원본 주차), `carry_count`(누적 이월 횟수), `related_ids`(RAG로 연결한 과거 Task), `metrics`(정량 지표 JSON), 타임스탬프.
+2. **Task를 1급 시민으로 — 이 서비스는 "수치 집계"가 아니라 "task 흐름 관리"가 목적이다.** (확정) 보고서를 통문서로 저장하지 않고, **Task 단위로 저장**한 뒤 보고서는 Task를 렌더링한 결과로 본다.
+   - **방향성**: 진행률(%) 같은 수치 관리가 아니라, "지난주에 한 일 / 금주에 한 일 / 넘어가는 할 일"을 **task로 추적**하는 것이 중심이다. 정량 지표(metrics)는 필수가 아닌 **선택적 보조 축**이다(아래 #6).
+   - 주요 필드(계획): `id`(시스템 자동 부여), `week`(예: `2026-W26`), `system`(운영 대상 시스템 식별자 — 멀티 시스템 지원), `category_key`(템플릿 카테고리의 `key`, label 아님), `title`/`detail`, `status`, `carried_from`, `carry_count`, `thread_id`, `related_ids`(RAG로 연결한 과거 Task), `metrics`(정량 지표 JSON, 선택), 타임스탬프.
+   - **`status`는 "작업 상태"만 담는다 — 출처와 분리한다.** (확정) 이전 설계는 `status`에 `이월`을 섞었으나, "이월됐다는 사실(출처)"과 "지금 어떤 상태인가(작업 상태)"는 서로 다른 정보이고 한 task에 **동시에 참**일 수 있다(예: 지난주에서 넘어왔고 + 지금 진행중). 한 칸에 섞으면 둘 중 하나를 잃는다. 그래서 분리한다:
+     - `status` ∈ {`완료`, `진행중`, `미완료`, `보류`, `취소`} — 작업 상태 하나만. (`보류`=의존성/승인 대기로 막힘, 단순 미완료와 리스크 의미가 다름. `취소`=더 이상 안 함, 안 닫으면 carry 체인이 무한히 따라옴.)
+     - `carried_from`(이월 원본 주차, 없으면 신규)·`carry_count`(누적 이월 횟수) — "이월됐다"는 사실은 여기서만 표현. 이월 자동화(#4)의 조회는 `WHERE status IN (진행중, 미완료, 보류)`를 쓴다(`status=이월` 같은 자기충돌 조건을 만들지 않는다).
+   - **`thread_id` — 같은 일을 주차를 가로질러 한 줄로 꿴다.** (확정) 이월은 task를 복제하므로 같은 작업이 주마다 다른 `id`로 흩어진다. 같은 논리적 작업에는 **동일한 `thread_id`** 를 붙여, "이 일이 언제 시작해 몇 주째 끌고 있나"를 `WHERE thread_id=... ORDER BY week` 한 번으로 조회한다(`carried_from`을 거꾸로 재귀 추적하지 않는다). **carry 체인의 길이(=작업 연식)가 이 서비스의 핵심 리스크 신호**다(metric 악화보다 우선). `thread_id`는 신규 task 생성 시 시스템이 자동 발급하고, 이월 시 자동 복사한다 — **사용자는 절대 입력·관리하지 않는다.**
+   - **진행 관리는 진행률(%)이 아니라 날짜별 진행 메모(note log)로 한다.** (확정) task에 날짜 찍힌 한 줄 메모를 누적(`relay task note <id> "..."`). `thread_id`로 묶으면 주차별 진전이 한눈에 보이고("매주 전진 중" vs "3주째 같은 말 반복=사실상 방치"), 초안 서술 시 LLM에 이 메모를 넘겨 환각 없이 진척을 서술한다. 숫자 없이 진행 관리.
    - 보고서(주차 단위) 자체에도 상태가 있다: `draft → in_progress → finalized`. RAG 인덱싱은 `finalized`된 Task만 대상으로 한다(아래 작성 워크플로우 참조).
 
 3. **주차(week) 정의 — 월~금 업무주.** (확정)
@@ -52,15 +58,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - 식별 키는 ISO 주번호 표기(`YYYY-Www`, 예: `2026-W26`)를 사용하되, 경계 해석은 위 업무주 기준을 따른다. 모든 이월·집계 조회가 이 정의에 의존하므로 날짜→week 변환 유틸을 한 곳에 두고 재사용할 것.
 
 4. **이월(carry-over)은 두 갈래 — 이 서비스의 핵심 가치.** (확정) 금주 초안 생성 시:
-   - ① **미완료 이월**: 지난주 `status IN (진행중, 미완료)` Task를 금주로 복제하고 `carried_from`·`carry_count`를 기록한다.
-   - ② **계획 승격(promotion)**: 지난주 `category=다음주계획` 항목을 금주의 **신규 Task로 승격** 생성한다.
+   - ① **미완료 이월**: 지난주 `status IN (진행중, 미완료, 보류)` Task를 금주로 복제하고 `carried_from`·`carry_count`를 기록하며 **`thread_id`를 그대로 승계**한다(같은 작업임을 잇는다). `완료`·`취소`는 끌어오지 않는다.
+   - ② **계획 승격(promotion)**: 지난주 `category=다음주계획` 항목을 금주의 **신규 Task로 승격** 생성한다(승격분은 새 `thread_id`를 발급).
    - 이 둘을 합치면 "지난주 보고서만 있으면 금주 초안 대부분이 자동 완성"되는 흐름이 된다.
 
 5. **숫자는 코드, 서술은 LLM.** 정량 지표 집계(월간/연간 합산·평균)와 **전주 대비 증감(±%)·추세는 코드(SQL)로** 계산하고, LLM에는 그 확정값을 넘겨 **서술·맥락화만** 시킨다. LLM에게 숫자 계산을 맡기지 않는다(환각 방지).
 
-6. **정량 지표는 수동 입력 + 추세 자동계산.** (확정) 사용자가 `/metric set`으로 주차별 지표 값을 직접 입력하고, 전주 대비 증감·추세는 시스템이 자동 계산한다. 외부 모니터링/ITS 연동은 MVP 범위에서 제외(추후 확장).
+6. **정량 지표(metric)는 선택적 보조 축 — 입력한 경우에만 동작.** (확정) 이 서비스의 중심은 task 흐름 관리(#2)이고 metric은 보조다. 사용자가 `relay metric set`으로 주차별 지표 값을 직접 입력하고, 전주 대비 증감·추세는 시스템이 자동 계산한다.
+   - **미입력을 허용한다.** 카테고리당 지표 0개도 정상이며, 미입력 시 보고서에서 해당 지표 표를 통째로 생략한다. **검증 단계가 "지표 미입력"을 오류로 finalize를 막지 않는다.**
+   - 지표의 방향(개선/악화 판단)·집계 방식(합산/평균)·목표치(SLA) 같은 메타데이터는 **실제로 쓰는 사용자가 생길 때 추가**한다(MVP 제외, 템플릿 스키마에 자리만 비워둠).
+   - 외부 모니터링/ITS 연동은 MVP 범위에서 제외(추후 확장).
 
-7. **명령은 하이브리드 파싱.** `weekly task add <카테고리> "내용"`처럼 명령·카테고리는 **코드로 결정적 파싱**하고, 자연어 본문만 LLM에 넘긴다. 모든 입력을 LLM으로 보내지 않는다.
+7. **명령은 하이브리드 파싱.** `relay task add <카테고리> "내용"`처럼 명령·카테고리는 **코드로 결정적 파싱**하고, 자연어 본문만 LLM에 넘긴다. 모든 입력을 LLM으로 보내지 않는다.
 
 8. **LLM/임베딩은 어댑터로 추상화 (데이터 경계 미정 → 교체 가능하게).** (확정) Provider 인터페이스를 두고 외부 API(Claude API + Voyage/OpenAI 임베딩)와 로컬(Ollama + BGE-m3 등 로컬 임베딩)을 교체 가능하게 한다.
    - **이유**: 사내 운영 보고 데이터(시스템명·장애 상세)를 외부 API로 보내도 되는지가 아직 미확정이다. 그래서 코드가 특정 provider에 묶이면 안 된다.
@@ -70,7 +79,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - **label과 role을 분리한다.** 코드는 사용자가 보는 `label`(한글 표시명)이 아니라 변하지 않는 `key`/`role`에 의존한다. 예: '다음주 계획 승격' 로직은 `label`이 아니라 `role: next_week_plan`을 찾는다. 사용자가 label·순서·힌트·지표를 바꿔도 로직이 깨지지 않게 한다.
    - **Task에는 `key`를 저장한다**(label 아님). 템플릿이 바뀌어도 과거 Task가 고아가 되지 않게.
    - **로드 시 검증 필수**: 깨진 YAML, 중복 `key`, 필수 role 누락(특히 `next_week_plan`)을 로드 시점에 잡아 명확한 에러로 안내한다. 조용한 오동작 금지.
-   - **배포**: 저장소의 기본 템플릿은 원본(읽기 전용)으로 두고, 첫 실행 시 사용자 위치(예: `~/.config/weekly-agent/template.yaml` 또는 `./config/`)로 복사해 사용자는 사본을 편집한다. 사본이 없으면 기본을 복사 생성.
+   - **배포**: 저장소의 기본 템플릿은 원본(읽기 전용)으로 두고, 첫 실행 시 사용자 위치(예: `~/.config/relay/template.yaml` 또는 `./config/`)로 복사해 사용자는 사본을 편집한다. 사본이 없으면 기본을 복사 생성.
    - (선택) 출력 형식까지 커스터마이즈하려면 구조 템플릿(YAML)과 별도로 렌더 템플릿(Jinja2 Markdown)을 둘 수 있다. MVP에서는 구조 템플릿만으로 시작한다.
 
 10. **실행 환경·인터페이스·출력.** (확정)
@@ -78,24 +87,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     - **멀티 시스템 지원.** Task에 `system` 필드를 두고, RAG 메타 필터·집계·보고서 그룹핑에 `system`을 활용한다. 보고서는 한 장에 여러 시스템을 카테고리별로 그룹핑하거나 `export --system <name>`으로 특정 시스템만 추출한다.
     - **출력은 Markdown 우선.** 그룹웨어/위키에 붙여넣기 좋은 Markdown 파일 내보내기를 기본으로 한다. docx/이메일은 추후 확장(설계는 막지 않되 MVP 제외).
     - **비대화형 RAG 제안.** 단발 CLI는 대화가 안 되므로, `task add` 시 연관 후보를 **출력만** 하고 `task link <id>`로 후속 확정한다(y/n 프롬프트 대신).
+    - **task 참조는 "주차별 작은 번호 + `list`로 확인" 방식.** (확정) 후속 명령(`note`/`update`/`link`/`history`)에서 사용자가 가리키는 번호는 **현재 주차 안에서 1,2,3…로 매기는 짧은 번호**다(전역 통번호 아님 — 세션이 없어 매 명령 전 `list`로 현재 상태를 보게 되므로, 그때 보이는 작은 번호를 바로 쓰는 흐름이 가장 자연스럽다). 내부 DB의 `id`/`thread_id`는 시스템이 관리하고 **사용자에게 노출하지 않는다.** `relay task history <번호>`는 사용자가 준 번호로 시스템이 `thread_id`를 찾아 그 작업의 전 주차 이력을 모아 보여준다.
+    - **보고서·요약 뷰는 두 축.** 카테고리(주제별, 템플릿) 그룹핑에 더해, task 관리용 **시점별 뷰**를 제공한다: `[이번 주 한 일]`(status=완료) = 안정 운영의 증거 / `[넘어가는 일·다음 주 할 일]`(진행중·보류·미완료 + 다음주계획 승격) = 리스크 관리. 월간·연간 요약(`summary`)도 숫자 합산이 아니라 **task 롤업**(완료 N건/잔존 M건, 가장 오래 끈 작업=max `carry_count`, 반복 출현 패턴)을 중심으로 한다.
 
 ## 작성 워크플로우 (Authoring Flow)
 
 주간보고 1회 작성의 표준 흐름. **DB 저장은 항상, RAG 인덱싱은 finalized만**이 핵심 규칙이다.
 
 ```
-1) weekly draft            전주 finalized 보고에서 ① 미완료 이월 + ② 다음주계획 승격 → 금주 초안 생성
+1) relay draft            전주 finalized 보고에서 ① 미완료 이월 + ② 다음주계획 승격 → 금주 초안 생성
                            (전주 '완료' 항목은 끌어오지 않음. 참조할 전주 없음/미확정이면 빈 초안 + 안내)
                            → DB 저장 (보고 status: draft). 재실행 시 기존 draft 감지 → 경고/병합(멱등)
 
-2) weekly task add / metric set   신규 업무·이슈·지표 추가 (status: in_progress)
-   └─ RAG '읽기': 연관 과거 Task 후보를 출력 → weekly task link <id> 로 연결
+2) relay task add / metric set   신규 업무·이슈·지표 추가 (status: in_progress)
+   └─ RAG '읽기': 연관 과거 Task 후보를 출력 → relay task link <id> 로 연결
    → 추가/수정 즉시 DB 저장
 
-3) weekly review / edit     전체 검토 + 특정 task 수정   ◀──┐ (2↔3 반복 루프)
+3) relay review / edit     전체 검토 + 특정 task 수정   ◀──┐ (2↔3 반복 루프)
    └─ 수정 시 DB 갱신 ───────────────────────────────────┘
 
-4) weekly finalize          내용 확인 완료 → 보고 status: finalized
+4) relay finalize          내용 확인 완료 → 보고 status: finalized
    ├─ DB 확정 표시
    └─ RAG 동기화: finalized Task만 인덱싱 (이후 수정 시 re-index, 삭제 시 제거)
 ```
@@ -132,16 +143,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **LangGraph 재평가 기준**: 이 프로젝트에서 LangGraph가 이론적으로 맞는 유일한 지점은 **보고서 생성의 자가검증 루프**(narrate↔verify)다. 그조차 검증 항목이 서로 의존하며 실패 종류별로 분기·복구가 복잡해질 때만 *그 부분만* 서브그래프로 추출한다. 그 전까지는 `for` 루프로 충분. (검토/수정 루프는 단발 CLI+DB가 상태를 담당하므로 LangGraph의 체크포인트와 겹쳐 부적합. RAG 분기·월간 map-reduce는 규모가 작아 `if`/`asyncio.gather`로 충분.)
 
+## 테스트 정책 (Test Policy — 모듈 무결성 규칙)
+
+**규칙: `src/relay/` 의 모든 모듈은 대응 테스트를 가진다. 모듈을 신규 작성하거나 수정할 때, 그 변경을 커버하는 테스트를 같은 작업 안에서 추가·갱신하고 `uv run pytest` 전체가 통과해야 한다.** 테스트 없이 task를 "완료(`[x]`)"로 표시하지 않는다 — 무결성은 테스트로 증명한다.
+
+- **무엇을 테스트하나 — happy path만으로는 부족하다.** 설계가 명시한 **실패·엣지 케이스**를 반드시 포함한다(설계 정신 "조용한 오동작 금지"의 실행). 즉 잘못된 입력이 명확한 에러를 내는지, 경계값(주말/연말 ISO 경계, 첫 주/주 건너뜀/전주 미확정 등)이 맞는지까지 검증한다. 특히 **결정적 로직(week 변환·이월·승격·집계·숫자 정합성)은 예외 없이** 테스트로 고정한다(검증판 "숫자=코드" 원칙과 짝).
+- **에러는 메시지 내용까지 검증한다.** `pytest.raises(..., match=...)` 로 "어떤 에러가, 왜 나는지"를 고정해 설계 #9의 "명확한 에러로 안내"가 실제로 지켜지는지 확인한다.
+- **결정성 확보.** 시간·랜덤·IO·외부 API 의존은 주입으로 제거한다 — 예: `week.current_week_key(today=...)`, 템플릿 경로는 `RELAY_HOME`/`RELAY_TEMPLATE` 환경변수, LLM/임베딩은 **fake 어댑터**(설계 #8·#10의 어댑터 경계 활용, 실제 API 호출 없이). 테스트는 "오늘"이나 네트워크에 따라 깨지면 안 된다.
+- **명명·위치.** 모듈 `src/relay/<area>/<mod>.py` ↔ 테스트 `tests/test_<mod>.py` 로 1:1 대응(추적 가능하게).
+- **회귀 기준.** `examples/sample_report_*.md`(golden output)는 렌더러(T8·T12)의 회귀 테스트 기준이다 — 코드가 만드는 부분(표·추세·carry 경고·승격 표기)의 재현을 깨지 않는지 본다.
+- **완료 게이트.** 변경 작업은 `uv run pytest` 와 `uv run ruff check .` 가 **둘 다 통과**해야 끝난 것으로 본다.
+
 ## 계획된 명령 (Planned Commands — 단발 CLI)
 
 Typer 서브커맨드 형태(원 구상의 slash 명령에 대응). 명령 셋(예정):
-`weekly draft`, `weekly task add|update|list|link`, `weekly metric set`, `weekly review`, `weekly edit`, `weekly finalize`, `weekly summary week|month|year`, `weekly export [--system <name>]`, `weekly use <system>`(활성 컨텍스트).
+`relay draft`, `relay task add|update|list|note|history|link`, `relay metric set`, `relay review`, `relay edit`, `relay finalize`, `relay summary week|month|year`, `relay export [--system <name>]`, `relay use <system>`(활성 컨텍스트).
+- `task note <번호> "..."` — 작업에 날짜별 진행 메모 누적(진행률 % 대체, #2).
+- `task history <번호>` — 같은 작업의 주차별 이력을 `thread_id`로 모아 표시(#2). `update`의 status 값은 {완료/진행중/미완료/보류/취소}.
 
 ## 권장 개발 순서 (MVP-first)
 
-1. 템플릿 로더/검증 + SQLite + Task 모델 + week 변환 유틸 + `weekly task add`·`list`·`draft`·`finalize`(이월/승격 로직, LLM 없이 템플릿 렌더)
+1. 템플릿 로더/검증 + SQLite + Task 모델 + week 변환 유틸 + `relay task add`·`list`·`draft`·`finalize`(이월/승격 로직, LLM 없이 템플릿 렌더)
 2. LLM 연동(신규 업무 요약, 초안 서술 생성) — provider 어댑터 뒤에
-3. 집계 보고(`weekly summary month|year` — 숫자는 SQL, 서술은 LLM) + Markdown export
+3. 집계 보고(`relay summary month|year` — 숫자는 SQL, 서술은 LLM) + Markdown export
 4. (선택) RAG 도입 — `find_related_tasks` 내부를 LLM 직접투입 → sqlite-vec 하이브리드로 교체
 
 ## 명령어 (Commands)

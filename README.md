@@ -1,7 +1,10 @@
-# weekly-agent (주간보고 정리 agent)
+# Relay (주간보고 정리 agent)
 
 운영 중인 시스템의 **주간 업무 보고서**를, "지난주에 한 일의 단순 나열"이 아니라
 **①안정적으로 운영되고 있다는 증거 + ②향후 리스크 관리**에 초점을 맞춰 작성·정리하는 도구.
+
+이름 *Relay*는 핵심 동작에서 왔다 — 지난주의 미완료 task를 이번 주로 **바통처럼 넘기고**(carry-over),
+같은 작업을 주차를 가로질러 한 줄기로 잇는다.
 
 보고서는 세 축으로 구성된다: **정량 지표(숫자) / 정성 활동(한 일) / 예측(다음 주·리스크)**.
 
@@ -28,7 +31,7 @@
 
 ```bash
 uv sync                 # 가상환경(3.12) 생성 + 의존성 설치
-uv run weekly version   # CLI 동작 확인
+uv run relay version    # CLI 동작 확인
 uv run pytest           # 테스트
 uv run ruff check .     # 린트
 ```
@@ -42,7 +45,7 @@ uv sync --extra rag
 ## 프로젝트 구조
 
 ```
-src/weekly_agent/       애플리케이션 코드 (src 레이아웃)
+src/relay/              애플리케이션 코드 (src 레이아웃)
   cli.py                단발 CLI 진입점 (얇게 — 서비스 레이어 호출만)
 templates/              사용자 편집 가능한 보고서 템플릿 (YAML)
 examples/               렌더링 결과 예시 (golden output)
