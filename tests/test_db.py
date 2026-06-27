@@ -114,6 +114,13 @@ def test_check_constraint_rejects_carryover_status(store: Store) -> None:
         )
 
 
+def test_set_status_updates_task(store: Store) -> None:
+    store.add_task(_task())
+    updated = store.set_status(1, Status.DONE)
+    assert updated is not None and updated.status is Status.DONE
+    assert store.get_task(1).status is Status.DONE
+
+
 def test_report_status_transitions(store: Store) -> None:
     assert store.get_report("2026-W26", "그룹웨어") is None
     r = store.set_report_status("2026-W26", "그룹웨어", ReportStatus.DRAFT)

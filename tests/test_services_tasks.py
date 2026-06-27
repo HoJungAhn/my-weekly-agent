@@ -13,6 +13,7 @@ from relay.models import Status
 from relay.services.tasks import (
     create_task,
     list_tasks_numbered,
+    resolve_by_number,
     resolve_category,
     resolve_system,
 )
@@ -88,3 +89,15 @@ def test_numbering_isolated_by_system(store: Store) -> None:
     create_task(store, "incident", title="A", week="2026-W26", system="그룹웨어")
     _, n = create_task(store, "incident", title="B", week="2026-W26", system="포털")
     assert n == 1  # 다른 시스템은 번호가 다시 1부터
+
+
+def test_resolve_by_number_found(store: Store) -> None:
+    create_task(store, "incident", title="A", week="2026-W26", system="그룹웨어")
+    create_task(store, "incident", title="B", week="2026-W26", system="그룹웨어")
+    assert resolve_by_number(store, "2026-W26", "그룹웨어", 2).title == "B"
+
+
+def test_resolve_by_number_out_of_range(store: Store) -> None:
+    create_task(store, "incident", title="A", week="2026-W26", system="그룹웨어")
+    with pytest.raises(ValueError, match="번호 5 에 해당하는 task 가 없습니다"):
+        resolve_by_number(store, "2026-W26", "그룹웨어", 5)

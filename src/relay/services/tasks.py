@@ -76,3 +76,18 @@ def create_task(
 def list_tasks_numbered(store: Store, week: str, system: str) -> list[tuple[int, Task]]:
     """주차·시스템 task 를 표시 번호와 함께 반환한다."""
     return list(enumerate(store.list_tasks(week, system), start=1))
+
+
+def resolve_by_number(store: Store, week: str, system: str, number: int) -> Task:
+    """주차별 작은 번호(1-based)를 그 주차·시스템의 task 로 해석한다(설계 #10).
+
+    범위를 벗어나면 명확한 에러 — 'list 로 확인하라'는 안내까지 준다.
+    """
+    rows = list_tasks_numbered(store, week, system)
+    for n, task in rows:
+        if n == number:
+            return task
+    raise ValueError(
+        f"번호 {number} 에 해당하는 task 가 없습니다 ({week}/{system}, 현재 {len(rows)}개). "
+        "'relay task list' 로 번호를 확인하세요."
+    )

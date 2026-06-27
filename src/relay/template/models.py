@@ -94,6 +94,13 @@ class Template(BaseModel):
                 return cat
         raise KeyError(f"role 에 해당하는 카테고리가 없습니다: {role!r}")
 
+    def label_of(self, key: str) -> str:
+        """카테고리 key → label. 템플릿에서 사라진 고아 key 면 key 를 그대로 돌려준다(설계 #9)."""
+        for cat in self.categories:
+            if cat.key == key:
+                return cat.label
+        return key
+
     def ordered(self) -> list[Category]:
         """``order`` 순으로 정렬된 카테고리(보고서 렌더 순서)."""
         return sorted(self.categories, key=lambda c: c.order)

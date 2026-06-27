@@ -69,11 +69,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - 지표의 방향(개선/악화 판단)·집계 방식(합산/평균)·목표치(SLA) 같은 메타데이터는 **실제로 쓰는 사용자가 생길 때 추가**한다(MVP 제외, 템플릿 스키마에 자리만 비워둠).
    - 외부 모니터링/ITS 연동은 MVP 범위에서 제외(추후 확장).
 
-7. **명령은 하이브리드 파싱.** `relay task add <카테고리> "내용"`처럼 명령·카테고리는 **코드로 결정적 파싱**하고, 자연어 본문만 LLM에 넘긴다. 모든 입력을 LLM으로 보내지 않는다.
+7. **명령은 하이브리드 파싱.** **명령**(`/add` vs `/list` 등)은 항상 **코드로 결정적 파싱**한다. 카테고리 지정은 두 경로를 둔다(2026-W26 보강):
+   - **명시 경로(결정적)**: `/add <카테고리> <제목>` — 사용자가 카테고리를 키/이름으로 직접 주면 코드가 매칭(`resolve_category`). LLM 불필요.
+   - **자연어 캐처(LLM 보조)**: slash 없는 일반 문장을 입력하면 LLM이 카테고리 분류 + 제목 요약을 **제안**하고, 사용자가 y/수정/취소로 **확인**한 뒤 저장한다. 단, **LLM은 제안만** 하고 `category_key`가 템플릿의 실제 key인지 **코드가 검증**한다(구조화 출력 enum 제약 + `classify_capture` 재검증). 분류·제목 같은 "서술"은 LLM, 구조 검증은 코드 — 검증판 원칙과 일치.
+   - 즉 명령 동사는 LLM에 맡기지 않고, 자연어 본문의 분류만 LLM이 돕는다.
 
 8. **LLM/임베딩은 어댑터로 추상화 (데이터 경계 미정 → 교체 가능하게).** (확정) Provider 인터페이스를 두고 외부 API(Claude API + Voyage/OpenAI 임베딩)와 로컬(Ollama + BGE-m3 등 로컬 임베딩)을 교체 가능하게 한다.
    - **이유**: 사내 운영 보고 데이터(시스템명·장애 상세)를 외부 API로 보내도 되는지가 아직 미확정이다. 그래서 코드가 특정 provider에 묶이면 안 된다.
    - **MVP는 외부 API로 개발**하되, 호출 지점을 모두 어댑터 뒤로 숨겨 나중에 로컬로 교체 가능하게 둔다. AI 기능 구현 시 최신 Claude 모델(Opus 4.8 / Sonnet 4.6)을 기본으로 둔다. 임베딩은 Anthropic이 제공하지 않으므로 별도 모델(Voyage/OpenAI 또는 로컬 BGE-m3)을 쓴다.
+   - **키·모델은 설정 파일(`~/.config/relay/config.ini`의 `[llm]` 섹션)로 관리.** (확정) 우선순위는 `ANTHROPIC_API_KEY` 환경변수 > 설정파일. 설정에 키가 없고 **대화형(tty)** 이면 쉘 첫 실행 시 `getpass`로 한 번 입력받아 저장한다(권한 600). 비대화형(파이프·테스트)에서는 프롬프트를 띄우지 않고 키 없으면 오프라인 fake provider 로 폴백한다.
 
 9. **보고서 템플릿은 사용자 편집 가능한 외부 파일.** (확정) 카테고리·지표·옵션을 코드에 하드코딩하지 않고 YAML 템플릿(`templates/weekly_template.yaml`)으로 외부화한다.
    - **label과 role을 분리한다.** 코드는 사용자가 보는 `label`(한글 표시명)이 아니라 변하지 않는 `key`/`role`에 의존한다. 예: '다음주 계획 승격' 로직은 `label`이 아니라 `role: next_week_plan`을 찾는다. 사용자가 label·순서·힌트·지표를 바꿔도 로직이 깨지지 않게 한다.
@@ -82,12 +86,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - **배포**: 저장소의 기본 템플릿은 원본(읽기 전용)으로 두고, 첫 실행 시 사용자 위치(예: `~/.config/relay/template.yaml` 또는 `./config/`)로 복사해 사용자는 사본을 편집한다. 사본이 없으면 기본을 복사 생성.
    - (선택) 출력 형식까지 커스터마이즈하려면 구조 템플릿(YAML)과 별도로 렌더 템플릿(Jinja2 Markdown)을 둘 수 있다. MVP에서는 구조 템플릿만으로 시작한다.
 
-10. **실행 환경·인터페이스·출력.** (확정)
-    - **단발 CLI** (Typer 권장). 인터랙티브 TUI 아님 — 명령이 끝나면 종료된다. 세션 메모리가 없으므로 **"활성 컨텍스트(현재 주/시스템)"를 DB에 저장**하거나 `--week`·`--system` 옵션으로 매번 지정한다. 기본값: 현재 업무주 / 마지막 사용 시스템.
+10. **실행 환경·인터페이스·출력.** (확정 — 2026-W26 인터페이스 방향 변경됨)
+    - **대화형 slash 쉘(REPL)** (SPEC 원안 복귀). `relay` 를 실행하면 상주 세션이 뜨고, `/task add ...`·`/list`·`/update`·`/note`·`/history`·`/use <system>`·`/week <week>` 같은 **slash 명령**을 연속 입력한다. **활성 컨텍스트(현재 주/시스템)는 세션 메모리에 유지**하고 `/use`·`/week` 로 전환한다(기본값: 현재 업무주 / 마지막 사용 시스템).
+      - **이전 결정(단발 CLI)에서 전환한 이유**: 연속 작업 시 매번 `relay` prefix를 치지 않아도 되고, 활성 컨텍스트가 세션에 살아 있어 자연스럽다. 무엇보다 **대화형이라 RAG 연관 제안을 그 자리에서 y/n으로 확정**할 수 있다(아래 RAG 항목의 "비대화형" 제약이 풀림).
+      - **트레이드오프(수용함)**: 상주 세션이라 hook·CI·스크립트에서 직접 호출이 어렵다. 자동화가 필요해지면 그때 단발 진입점을 별도로 노출한다(현재 범위 밖).
+      - **구현**: 무거운 REPL 프레임워크를 쓰지 않고 표준 라이브러리(`input`+`shlex`)로 얇게 만든다(의존성 정책). 명령 처리는 순수 함수 `dispatch(session, line) -> 출력줄` 로 분리해 stdin/stdout 없이 테스트한다. slash 명령은 같은 `services/` 함수를 재사용하는 한 겹 레이어일 뿐이다.
     - **멀티 시스템 지원.** Task에 `system` 필드를 두고, RAG 메타 필터·집계·보고서 그룹핑에 `system`을 활용한다. 보고서는 한 장에 여러 시스템을 카테고리별로 그룹핑하거나 `export --system <name>`으로 특정 시스템만 추출한다.
     - **출력은 Markdown 우선.** 그룹웨어/위키에 붙여넣기 좋은 Markdown 파일 내보내기를 기본으로 한다. docx/이메일은 추후 확장(설계는 막지 않되 MVP 제외).
-    - **비대화형 RAG 제안.** 단발 CLI는 대화가 안 되므로, `task add` 시 연관 후보를 **출력만** 하고 `task link <id>`로 후속 확정한다(y/n 프롬프트 대신).
-    - **task 참조는 "주차별 작은 번호 + `list`로 확인" 방식.** (확정) 후속 명령(`note`/`update`/`link`/`history`)에서 사용자가 가리키는 번호는 **현재 주차 안에서 1,2,3…로 매기는 짧은 번호**다(전역 통번호 아님 — 세션이 없어 매 명령 전 `list`로 현재 상태를 보게 되므로, 그때 보이는 작은 번호를 바로 쓰는 흐름이 가장 자연스럽다). 내부 DB의 `id`/`thread_id`는 시스템이 관리하고 **사용자에게 노출하지 않는다.** `relay task history <번호>`는 사용자가 준 번호로 시스템이 `thread_id`를 찾아 그 작업의 전 주차 이력을 모아 보여준다.
+    - **대화형 RAG 제안.** 대화형 쉘이므로 `/task add` 시 연관 후보를 보여주고 **그 자리에서 y/n으로 연결을 확정**할 수 있다(`/link`로 후속 확정도 가능). (단발 CLI 시절의 "출력만 하고 나중에 link" 제약은 더 이상 없음.)
+    - **task 참조는 "주차별 작은 번호 + `/list`로 확인" 방식.** (확정) 후속 명령(`/note`·`/update`·`/link`·`/history`)에서 사용자가 가리키는 번호는 **활성 주차 안에서 1,2,3…로 매기는 짧은 번호**다(전역 통번호 아님). 내부 DB의 `id`/`thread_id`는 시스템이 관리하고 **사용자에게 노출하지 않는다.** `/history <번호>`는 사용자가 준 번호로 시스템이 `thread_id`를 찾아 그 작업의 전 주차 이력을 모아 보여준다.
     - **보고서·요약 뷰는 두 축.** 카테고리(주제별, 템플릿) 그룹핑에 더해, task 관리용 **시점별 뷰**를 제공한다: `[이번 주 한 일]`(status=완료) = 안정 운영의 증거 / `[넘어가는 일·다음 주 할 일]`(진행중·보류·미완료 + 다음주계획 승격) = 리스크 관리. 월간·연간 요약(`summary`)도 숫자 합산이 아니라 **task 롤업**(완료 N건/잔존 M건, 가장 오래 끈 작업=max `carry_count`, 반복 출현 패턴)을 중심으로 한다.
 
 ## 작성 워크플로우 (Authoring Flow)
@@ -154,12 +161,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **회귀 기준.** `examples/sample_report_*.md`(golden output)는 렌더러(T8·T12)의 회귀 테스트 기준이다 — 코드가 만드는 부분(표·추세·carry 경고·승격 표기)의 재현을 깨지 않는지 본다.
 - **완료 게이트.** 변경 작업은 `uv run pytest` 와 `uv run ruff check .` 가 **둘 다 통과**해야 끝난 것으로 본다.
 
-## 계획된 명령 (Planned Commands — 단발 CLI)
+## 계획된 명령 (Planned Commands — 대화형 slash 쉘)
 
-Typer 서브커맨드 형태(원 구상의 slash 명령에 대응). 명령 셋(예정):
-`relay draft`, `relay task add|update|list|note|history|link`, `relay metric set`, `relay review`, `relay edit`, `relay finalize`, `relay summary week|month|year`, `relay export [--system <name>]`, `relay use <system>`(활성 컨텍스트).
-- `task note <번호> "..."` — 작업에 날짜별 진행 메모 누적(진행률 % 대체, #2).
-- `task history <번호>` — 같은 작업의 주차별 이력을 `thread_id`로 모아 표시(#2). `update`의 status 값은 {완료/진행중/미완료/보류/취소}.
+`relay` 실행 → 쉘 진입 후 slash 명령 입력(맨 앞 `/` 생략 가능, `/task add` 접두 허용). 명령 셋:
+`/draft`, `/add`·`/update`·`/list`·`/note`·`/history`·`/link`, `/metric set`, `/review`, `/edit`, `/finalize`, `/summary week|month|year`, `/export [--system <name>]`, `/use <system>`·`/week <week>`(활성 컨텍스트 전환).
+- `/note <번호> "..."` — 작업에 날짜별 진행 메모 누적(진행률 % 대체, #2).
+- `/history <번호>` — 같은 작업의 주차별 이력을 `thread_id`로 모아 표시(#2). `/update`의 status 값은 {완료/진행중/미완료/보류/취소}.
+- 구현됨: `/add`·`/list`·`/update`·`/note`·`/history`·`/use`·`/week`·`/help`·`/quit` (`relay.shell.dispatch`).
 
 ## 권장 개발 순서 (MVP-first)
 

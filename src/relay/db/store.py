@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from relay.db.schema import SCHEMA_SQL
-from relay.models import Note, Report, ReportStatus, Task
+from relay.models import Note, Report, ReportStatus, Status, Task
 from relay.week import KST
 
 
@@ -100,6 +100,16 @@ class Store:
         stored = self.get_task(cur.lastrowid)
         assert stored is not None  # 방금 INSERT 했으므로 존재
         return stored
+
+    def set_status(self, task_id: int, status: Status) -> Task | None:
+        """task 의 작업 상태를 변경한다(updated_at 갱신). 없으면 None."""
+        now = self._clock().isoformat()
+        self.conn.execute(
+            "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
+            (status.value, now, task_id),
+        )
+        self.conn.commit()
+        return self.get_task(task_id)
 
     def get_task(self, task_id: int) -> Task | None:
         row = self.conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()

@@ -33,14 +33,16 @@
   - 진행 메모 `note`는 별도 테이블(`task_id`, 날짜, 본문)로 누적.
 - **완료 기준**: 마이그레이션/초기화 코드, 모델 ↔ 행 매핑 테스트. `status`에 이월 값이 절대 안 들어가는지 검증.
 
-### [~] T5. `relay task add` / `list` / `update` / `note`
-- **내용**: 결정적 파싱으로 카테고리·명령을 처리(설계 #7). `add <카테고리> "내용"`은 LLM 없이 그대로 저장. `list`는 **현재 주차 안에서 1,2,3… 작은 번호**로 표시(설계 #10) — 후속 명령은 이 번호로 가리킨다. `update <번호> <status>`, `note <번호> "..."`(진행 메모 누적).
-- **완료 기준**: 활성 컨텍스트(현재 주/시스템) 기본값 적용, `--week`/`--system` 오버라이드. 번호→내부 id 해석 로직 테스트.
-- **진행**: ✅ 최소 슬라이스 `add`+`list` 완료 — `config.py`(경로/기본값), `services/tasks.py`(카테고리 해석·번호 매김), `cli.py` task 서브커맨드, `Store.last_used_system()`. 테스트: `test_services_tasks.py`(9) + `test_cli.py`(6). ⬜ 남음: `update`(상태 변경 {완료/진행중/미완료/보류/취소}), `note`(진행 메모), 번호→id 해석을 두 명령에 연결.
+### [x] T5. task add / list / update / note  (+ 인터페이스를 대화형 slash 쉘로 전환)
+- **내용**: 결정적 파싱으로 카테고리·명령을 처리(설계 #7). `/add <카테고리> <제목>`은 LLM 없이 그대로 저장. `/list`는 **활성 주차 안에서 1,2,3… 작은 번호**로 표시(설계 #10) — 후속 명령은 이 번호로 가리킨다. `/update <번호> <status>`, `/note <번호> <내용>`(진행 메모 누적).
+- **완료 기준**: 활성 컨텍스트(주/시스템) 세션 유지 + `/use`·`/week` 전환. 번호→내부 id 해석 로직 테스트.
+- **완료**: `config.py`(경로/기본값), `services/tasks.py`(카테고리 해석·번호 매김·`resolve_by_number`), **`shell.py`(대화형 REPL — 순수 함수 `dispatch`)**, `cli.py`(인자 없이 → 쉘 기동), `Store.last_used_system()`·`set_status()`.
+- **인터페이스 변경(설계 #10 갱신)**: 단발 CLI → **대화형 slash 쉘**로 전환(SPEC 원안 복귀). `relay` 실행 시 상주 세션, `/add`·`/list`·`/update`·`/note`·`/history`·`/use`·`/week`·`/help`·`/quit`. 테스트: `test_shell.py`(18) + `test_cli.py`(3, 버전·기동·EOF).
 
-### [ ] T6. `relay task history`
+### [x] T6. `relay task history`
 - **내용**: 사용자가 준 작은 번호 → `thread_id` 해석 → 그 작업의 전 주차 이력을 모아 표시(설계 #2). carry_count·주차별 note를 함께 보여 "몇 주째 끌고 있나 / 매주 전진했나"가 드러나게.
 - **완료 기준**: 여러 주에 걸친 이월 체인 시나리오 테스트.
+- **완료**: `cli.py task history` + `Template.label_of()`(고아 key fallback) + `Store.thread_history()`(T4). 주차별 신규/이월·상태·카테고리·진행 메모 표시. 다주 thread 정렬은 `test_db.test_thread_history_orders_by_week`, CLI 표시는 `test_cli.test_note_then_history_shows_note`. (다주 이월 체인은 T7 이월 구현 후 자연 검증.)
 
 ### [ ] T7. `relay draft` — 이월 + 승격 (핵심 가치)
 - **내용**: 전주 finalized 보고에서 ① `status IN (진행중,미완료,보류)` 복제(이월, `thread_id` 승계·`carry_count`+1) + ② `next_week_plan` 항목을 금주 신규 task로 승격(새 thread)(설계 #4). 완료/취소는 안 끌어옴. 재실행 멱등: 사람이 추가/수정한 task는 건드리지 않고 이월·승격분만 upsert(`carried_from` 마커로 구분).
@@ -58,9 +60,14 @@
 
 ## 마일스톤 2 — LLM 연동 (어댑터 뒤)
 
-### [ ] T10. LLM provider 어댑터
+### [~] T10. LLM provider 어댑터
 - **내용**: provider 인터페이스를 두고 외부 API(Claude API)와 로컬(Ollama 등)을 교체 가능하게(설계 #8). 호출 지점을 모두 어댑터 뒤로 숨긴다. 최신 Claude 모델(Opus 4.8 / Sonnet 4.6) 기본. `--dry-run`으로 "외부로 나가는 프롬프트"를 호출 없이 출력(데이터 경계 미확정 대비).
 - **완료 기준**: 어댑터 인터페이스 + Claude 구현 + 가짜(fake) 구현(테스트용).
+- **완료(부분)**: `llm/base.py`(`LLMProvider` ABC, `Classification`, `CategoryOption`, `DEFAULT_MODEL`), `llm/claude.py`(tool-use 구조화 출력, key enum 제약, `api_key` 주입), `llm/fake.py`(오프라인 키워드 분류), `make_provider`/`default_provider`. **키·모델은 설정 파일 `config.ini`(`[llm]`)로 관리** — `config.load_llm_config`/`save_api_key`(env 우선, 600 권한), 쉘 첫 실행 시 tty면 `getpass` 프롬프트→저장, 아니면 오프라인 폴백. 테스트 `test_llm.py`(11)+`test_config.py`(6). ⬜ 남음: `--dry-run`, narrate 용 메서드(T12에서 확장).
+
+### [x] T10b. 자연어 캐처 (LLM 분류 입력)
+- **내용**: slash 없는 일반 문장 → LLM이 카테고리 분류 + 제목 요약 → y/수정/취소 확인 후 저장(설계 #7 보강). LLM은 제안만, key는 코드가 템플릿과 대조 검증.
+- **완료**: `services/capture.py`(`classify_capture`, key 검증), `shell.py`(pending 상태 + `_capture`/`_resolve_pending`/`dispatch` 자연어 분기), 키 없으면 오프라인 fake 폴백. 테스트 `test_shell.py` 캐처 5케이스 + `test_llm.py` 검증.
 
 ### [ ] T11. 신규 업무 요약 (`task add` 본문 정리)
 - **내용**: 자연어 본문만 LLM에 넘겨 요약·정리(설계 #7). 카테고리·명령 파싱은 코드가 이미 처리. 결과는 task `detail`에 저장.
