@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from relay.llm.base import CategoryOption, Classification, LLMProvider
+from relay.llm.base import CategoryOption, Classification, LLMProvider, SelfCritiqueResult
 
 # (role, 키워드) — 위에서부터 먼저 매칭. role 은 템플릿 카테고리의 role 과 맞춰 해석한다.
 _RULES: list[tuple[str, list[str]]] = [
@@ -18,8 +18,16 @@ _RULES: list[tuple[str, list[str]]] = [
 
 
 def _make_title(text: str, limit: int = 40) -> str:
-    t = " ".join(text.strip().split())
+    # 멀티라인이면 첫 줄만 제목으로
+    first = text.split("\n")[0]
+    t = " ".join(first.strip().split())
     return t if len(t) <= limit else t[:limit].rstrip() + "…"
+
+
+def _make_detail(text: str) -> str:
+    """멀티라인 입력에서 첫 줄 이후를 상세 내용으로 반환한다."""
+    lines = text.split("\n")
+    return "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
 
 
 class FakeProvider(LLMProvider):
@@ -35,4 +43,27 @@ class FakeProvider(LLMProvider):
                 break
         if chosen is None:  # 못 정하면 운영현황(operation) 또는 첫 카테고리
             chosen = by_role.get("operation") or categories[0]
-        return Classification(category_key=chosen.key, title=_make_title(text))
+        return Classification(
+            category_key=chosen.key,
+            title=_make_title(text),
+            detail=_make_detail(text),
+        )
+
+    def narrate_section(
+        self,
+        label: str,
+        hint: str,
+        task_block: str,
+        feedback: str | None = None,
+    ) -> str:
+        """오프라인에서는 서술을 생성하지 않는다 — render_with_narrative 는 task 목록만 표시."""
+        return ""
+
+    def self_critique(
+        self,
+        label: str,
+        task_block: str,
+        narrative: str,
+    ) -> SelfCritiqueResult:
+        """오프라인에서는 항상 통과 — 검증 루프가 즉시 종료된다."""
+        return SelfCritiqueResult(ok=True, issues=[], feedback="")

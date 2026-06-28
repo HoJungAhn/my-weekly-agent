@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from relay.llm.base import DEFAULT_MODEL, CategoryOption, Classification, LLMProvider
+from relay.llm.base import DEFAULT_MODEL, CategoryOption, Classification, LLMProvider, SelfCritiqueResult
 
 
 def make_provider(api_key: str | None, model: str | None = None) -> LLMProvider:
@@ -33,6 +33,7 @@ __all__ = [
     "CategoryOption",
     "Classification",
     "LLMProvider",
+    "SelfCritiqueResult",
     "default_provider",
     "make_provider",
 ]

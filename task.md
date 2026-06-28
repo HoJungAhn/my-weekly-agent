@@ -44,38 +44,43 @@
 - **완료 기준**: 여러 주에 걸친 이월 체인 시나리오 테스트.
 - **완료**: `cli.py task history` + `Template.label_of()`(고아 key fallback) + `Store.thread_history()`(T4). 주차별 신규/이월·상태·카테고리·진행 메모 표시. 다주 thread 정렬은 `test_db.test_thread_history_orders_by_week`, CLI 표시는 `test_cli.test_note_then_history_shows_note`. (다주 이월 체인은 T7 이월 구현 후 자연 검증.)
 
-### [ ] T7. `relay draft` — 이월 + 승격 (핵심 가치)
+### [x] T7. `relay draft` — 이월 + 승격 (핵심 가치)
 - **내용**: 전주 finalized 보고에서 ① `status IN (진행중,미완료,보류)` 복제(이월, `thread_id` 승계·`carry_count`+1) + ② `next_week_plan` 항목을 금주 신규 task로 승격(새 thread)(설계 #4). 완료/취소는 안 끌어옴. 재실행 멱등: 사람이 추가/수정한 task는 건드리지 않고 이월·승격분만 upsert(`carried_from` 마커로 구분).
 - **완료 기준**: 엣지 케이스 — 첫 주/주 건너뜀/전주 미확정 시 빈 초안 + 안내(설계 워크플로우). 멱등 재실행 테스트.
+- **완료**: `services/draft.py`(`DraftResult`, `create_draft` — 승격 체크를 이월 체크보다 먼저), `shell.py`(`_cmd_draft`). 승격은 `role: next_week_plan` 기준, 이월은 `CARRYABLE_STATUSES`(진행중·미완료·보류). 멱등: 이월은 `thread_id` 정확 중복 검사, 승격은 `carried_from+title` 휴리스틱. 엣지 케이스(전주 없음/전주 finalized 아님/task 없음/첫 주) 모두 경고+빈 초안. 테스트 `test_draft.py` 19케이스.
+- **추가 완료(T7 작업 중)**: LLM 스피너 애니메이션(`_spinner` — tty 전용, 테스트 투명), 멀티라인 자연어 입력(`_collect_multiline`, 빈 줄로 완료), `Store.delete_task()` + `/delete`·`/del`·`/rm` 명령(CASCADE notes, finalized 경고), `FakeProvider` 멀티라인 지원. 테스트 `test_shell.py` 삭제 6케이스 + 멀티라인 4케이스, `test_db.py` 삭제 4케이스.
 
-### [ ] T8. `relay finalize` + 보고서 렌더 (LLM 없이)
+### [x] T8. `relay finalize` + 보고서 렌더 (LLM 없이)
 - **내용**: 보고 상태를 `finalized`로 확정. 템플릿 카테고리 순서대로 task를 Markdown 렌더(설계 #10, Markdown 우선). 카테고리(주제별) 그룹핑 + **"한 일 / 할 일" 시점별 뷰**(완료 vs 진행중·보류·미완료·승격) 함께. `carry_count ≥ 임계치`는 ⚠ 리스크로 표기.
 - **완료 기준**: `examples/sample_report_2026-W26.md`(golden output)의 비-LLM 부분(표·추세·carry 경고·승격 표기)을 재현.
+- **완료**: `services/render.py`(`render_report` — 카테고리 order 정렬, 이월 마커·승격 마커·완료·보류 접두, detail 서브 불릿, carry 임계 도달 task → next_week 섹션 리스크 자동 삽입, 빈 카테고리 "해당 없음"). `shell.py`에 `/review`(상태 변경 없이 미리보기) + `/finalize`(FINALIZED 확정 + Markdown 출력) 추가. 테스트 `test_render.py` 26케이스(헤더/카테고리 순서/이월 마커/승격 마커/상태 접두/detail/리스크 삽입/격리/쉘 통합).
 
-### [ ] T9. `relay status` — 사전 점검 / 오리엔테이션
-- **내용**: 단발 CLI라 세션 기억이 없으므로 현재 주/시스템/보고상태, task 집계(완료/진행중/보류/미완료), 미입력 지표, `carry_count` 임계 도달 작업을 한눈에. finalize 전 사람이 확인하는 용도.
-- **완료 기준**: 템플릿이 선언한 "이번 주 기대 지표" 대비 미입력 목록을 코드로 계산.
+### [ ] T9. `/status` — 사전 점검 / 오리엔테이션
+- **내용**: 대화형 쉘에서 현재 주/시스템/보고상태, task 집계(완료/진행중/보류/미완료), `carry_count` 임계 도달 작업을 한눈에. finalize 전 사람이 확인하는 용도.
+- **완료 기준**: 상태별 task 카운트, carry_count 임계 도달 목록을 코드로 계산해 출력.
 
 ---
 
 ## 마일스톤 2 — LLM 연동 (어댑터 뒤)
 
-### [~] T10. LLM provider 어댑터
+### [x] T10. LLM provider 어댑터
 - **내용**: provider 인터페이스를 두고 외부 API(Claude API)와 로컬(Ollama 등)을 교체 가능하게(설계 #8). 호출 지점을 모두 어댑터 뒤로 숨긴다. 최신 Claude 모델(Opus 4.8 / Sonnet 4.6) 기본. `--dry-run`으로 "외부로 나가는 프롬프트"를 호출 없이 출력(데이터 경계 미확정 대비).
 - **완료 기준**: 어댑터 인터페이스 + Claude 구현 + 가짜(fake) 구현(테스트용).
-- **완료(부분)**: `llm/base.py`(`LLMProvider` ABC, `Classification`, `CategoryOption`, `DEFAULT_MODEL`), `llm/claude.py`(tool-use 구조화 출력, key enum 제약, `api_key` 주입), `llm/fake.py`(오프라인 키워드 분류), `make_provider`/`default_provider`. **키·모델은 설정 파일 `config.ini`(`[llm]`)로 관리** — `config.load_llm_config`/`save_api_key`(env 우선, 600 권한), 쉘 첫 실행 시 tty면 `getpass` 프롬프트→저장, 아니면 오프라인 폴백. 테스트 `test_llm.py`(11)+`test_config.py`(6). ⬜ 남음: `--dry-run`, narrate 용 메서드(T12에서 확장).
+- **완료**: `llm/base.py`(`LLMProvider` ABC, `Classification`, `CategoryOption`, `SelfCritiqueResult`, `DEFAULT_MODEL`), `llm/claude.py`(`classify`·`narrate_section`·`self_critique` — tool-use 구조화 출력, `dry_run=True`로 API 미호출 + 프롬프트 출력), `llm/fake.py`(오프라인 키워드 분류 + `narrate_section→""`, `self_critique→ok=True` 스텁), `make_provider`/`default_provider`. 키·모델 설정 파일 관리. `--dry-run` 지원(ClaudeProvider `dry_run` 플래그). 테스트 `test_llm.py`(11)+`test_config.py`(6).
 
 ### [x] T10b. 자연어 캐처 (LLM 분류 입력)
 - **내용**: slash 없는 일반 문장 → LLM이 카테고리 분류 + 제목 요약 → y/수정/취소 확인 후 저장(설계 #7 보강). LLM은 제안만, key는 코드가 템플릿과 대조 검증.
 - **완료**: `services/capture.py`(`classify_capture`, key 검증), `shell.py`(pending 상태 + `_capture`/`_resolve_pending`/`dispatch` 자연어 분기), 키 없으면 오프라인 fake 폴백. 테스트 `test_shell.py` 캐처 5케이스 + `test_llm.py` 검증.
 
-### [ ] T11. 신규 업무 요약 (`task add` 본문 정리)
+### [x] T11. 신규 업무 요약 (`task add` 본문 정리)
 - **내용**: 자연어 본문만 LLM에 넘겨 요약·정리(설계 #7). 카테고리·명령 파싱은 코드가 이미 처리. 결과는 task `detail`에 저장.
 - **완료 기준**: 어댑터 통해 호출, 실패 시 원문 보존(graceful degrade).
+- **완료**: ClaudeProvider `classify()` 의 `detail` 필드가 멀티라인 입력을 2-3문장으로 요약해 저장(tool-use 스키마에 명시). FakeProvider 는 멀티라인 2번째 줄 이후를 raw detail 로 보존. 실패 시 `_capture()` 가 "⚠ 분류 실패" 메시지 출력 + pending 미저장(원문 유실 없음). 어댑터 뒤로 격리됨.
 
-### [ ] T12. 초안 서술 생성 + 자가검증 루프
+### [x] T12. 초안 서술 생성 + 자가검증 루프
 - **내용**: `collect() → narrate() → render() → verify()` 순수 함수 분리(검증 단계). 숫자·데이터는 collect 확정값으로 루프 밖, **서술만 재생성**. ① 결정론 검증(코드: 숫자 정합성·카테고리/이월/승격 누락·빈 섹션 표기·Markdown 유효성) 먼저 → 통과분만 ② 판단 검증(LLM self-critique, Pydantic 구조화: 환각/3축 충족/목적 부합/리스크 반영). `MAX_ATTEMPTS=2~3`, 초과 시 "⚠ 검증 미통과" 표시 초안으로 남김(차단 아님). 데이터 문제는 재시도 말고 사람에게 안내.
 - **완료 기준**: `for` 루프로 구현(LangGraph 미도입 — 의존성 정책). 검증 항목별 테스트.
+- **완료**: `services/report.py`(`collect`·`_narrate_section_with_retry`·`verify_deterministic`·`render_with_narrative`·`generate_report`). 섹션 단위 narrate↔verify `for` 루프(MAX_ATTEMPTS=3). 결정론 검증: 이월 임계 task 있을 때 서술 내 리스크 언급 여부. LLM 검증: `self_critique()` tool-use 구조화 출력. FakeProvider 로 전체 파이프라인 API 없이 테스트 가능. `/finalize` → `generate_report()` 경유. 테스트 `test_report.py` 21케이스(collect/verify/retry 루프/render/통합).
 
 ---
 

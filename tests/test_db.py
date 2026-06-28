@@ -136,3 +136,31 @@ def test_report_check_constraint(store: Store) -> None:
             "INSERT INTO reports (week, system, status, created_at, updated_at) "
             "VALUES ('2026-W26', 'x', 'bogus', 'now', 'now')"
         )
+
+
+# ── 삭제 ──────────────────────────────────────────────────────────────────
+
+def test_delete_task_removes_it(store: Store) -> None:
+    task = store.add_task(_task())
+    assert store.delete_task(task.id) is True
+    assert store.get_task(task.id) is None
+
+
+def test_delete_task_returns_false_for_missing(store: Store) -> None:
+    assert store.delete_task(9999) is False
+
+
+def test_delete_task_cascades_notes(store: Store) -> None:
+    """task 삭제 시 연결된 notes 가 CASCADE 로 함께 삭제된다."""
+    task = store.add_task(_task())
+    store.add_note(task.id, "메모1")
+    store.add_note(task.id, "메모2")
+    store.delete_task(task.id)
+    assert store.list_notes(task.id) == []
+
+
+def test_delete_task_does_not_affect_other_tasks(store: Store) -> None:
+    t1 = store.add_task(_task(title="A"))
+    t2 = store.add_task(_task(title="B"))
+    store.delete_task(t1.id)
+    assert store.get_task(t2.id) is not None

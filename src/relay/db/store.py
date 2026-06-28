@@ -101,6 +101,12 @@ class Store:
         assert stored is not None  # 방금 INSERT 했으므로 존재
         return stored
 
+    def delete_task(self, task_id: int) -> bool:
+        """task 와 연결된 notes 를 삭제한다(CASCADE). 존재하면 True, 없으면 False."""
+        cur = self.conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def set_status(self, task_id: int, status: Status) -> Task | None:
         """task 의 작업 상태를 변경한다(updated_at 갱신). 없으면 None."""
         now = self._clock().isoformat()
